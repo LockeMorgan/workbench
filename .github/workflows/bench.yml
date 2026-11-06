@@ -1,0 +1,59 @@
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      payload_url:
+        description: "Optional URL of a project tarball to fetch and build"
+        required: false
+        default: ""
+  repository_dispatch:
+    types: [bench]
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Check out the bench
+        uses: actions/checkout@v4
+
+      - name: Prepare results dir
+        run: mkdir -p results
+
+      - name: Fetch payload (optional)
+        if: ${{ inputs.payload_url != '' || github.event.client_payload.payload_url != '' }}
+        env:
+          PAYLOAD_URL: ${{ inputs.payload_url || github.event.client_payload.payload_url }}
+          PAYLOAD_TOKEN: ${{ secrets.PAYLOAD_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsSL ${PAYLOAD_TOKEN:+-H "Authorization: Bearer ${PAYLOAD_TOKEN}"} \
+            "$PAYLOAD_URL" -o results/payload.tar.gz
+          mkdir -p payload
+          tar -xzf results/payload.tar.gz -C payload
+          ls -la payload | tee results/payload-listing.txt
+
+      - name: Build / test hook
+        run: |
+          set -uo pipefail
+          # Project-specific build steps land here per project.
+          # Contract: write everything worth keeping into results/.
+          echo "bench run ${{ github.run_id }} at $(date -u +%FT%TZ)" | tee results/bench.log
+          if [ -f payload/build.sh ]; then
+            bash payload/build.sh 2>&1 | tee -a results/bench.log
+          else
+            echo "no payload build.sh; skeleton run only" | tee -a results/bench.log
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: results/
+          if-no-files-found: warn
+          retention-days: 90
